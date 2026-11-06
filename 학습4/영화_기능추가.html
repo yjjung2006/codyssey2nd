@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>내 영화 티어리스트</title>
+  <style>
+    :root { --paper:#faf8f3; --ink:#242922; --muted:#5f685d; --line:#d9dad1; --green:#276453; --sage:#e3eee7; --peach:#f2e6dc; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font-family:system-ui,-apple-system,sans-serif; line-height:1.6;  }
+    main { width:min(100% - 32px,860px); margin:32px auto 48px; }
+    header { display:flex; align-items:start; justify-content:space-between; gap:20px; flex-wrap:wrap; }
+    h1 { margin:0; font-size:clamp(26px,5vw,34px); line-height:1.25; letter-spacing:-.03em; }
+    .sub { margin:10px 0 0; color:var(--muted); max-width:46ch; }
+    .tools { display:flex; flex-wrap:wrap; gap:8px; width:100%; margin-top:20px; }
+    .tools input { min-width:0; flex:1 1 160px; border:1.5px solid var(--line); border-radius:12px; padding:11px 12px; font:inherit; }
+    button { font:inherit; cursor:pointer; }
+    .tools button { padding:10px 15px; border:1px solid var(--green); border-radius:12px; font-weight:700; background:var(--green); color:#fff; }
+    .tools .reset { border:1px solid var(--line); color:var(--muted); background:#fff; }
+    #message { min-height:26px; margin:14px 0; font-size:14px; color:var(--muted); }
+    .tiers { display:grid; gap:10px; }
+    .row { display:flex; min-height:90px; background:#fff; border:1.5px solid var(--line); border-radius:14px; overflow:hidden; }
+    .row.over { outline:3px solid var(--green); outline-offset:1px; }
+    .label { width:64px; flex-shrink:0; border:0; color:white; font-size:26px; font-weight:800; padding:12px 4px; display:flex; align-items:center; justify-content:center; }
+    .S .label { background:#a55239; } .A .label { background:#b4763e; } .B .label { background:#276453; } .C .label { background:#67725d; }
+    .drop { flex:1; min-width:0; display:flex; flex-wrap:wrap; align-content:flex-start; gap:9px; padding:12px; min-height:88px; }
+    .pool { margin-top:22px; }
+    .pool-head { margin:0 0 8px; border:0; padding:0; background:transparent; color:var(--muted); font-size:17px; font-weight:700; text-align:left; cursor:pointer; }
+    #pool { border:1.5px dashed var(--line); border-radius:14px; background:#fff; min-height:100px; }
+    .card { width:98px; min-height:62px; padding:8px; border:1px solid rgba(0,0,0,0.05); border-radius:10px; font-size:14px; font-weight:650; line-height:1.35; overflow-wrap:anywhere; color:var(--ink); cursor:grab; text-align:left; }
+    .card[aria-pressed="true"] { outline:3px solid var(--green); outline-offset:2px; z-index:1; }
+    .note { font-size:13px; color:var(--muted); margin-top:18px; }
+    :focus-visible { outline:3px solid #ba613a; outline-offset:3px; }
+    @media(max-width:420px) { .label { width:48px; font-size:20px; } .card { width:calc(50% - 5px); } .drop { padding:10px; gap:8px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>내 영화 티어리스트</h1>
+        <p class="sub">영화를 선택한 뒤 옮길 등급 글자를 눌러 주세요. 카드를 끌어서 놓아도 됩니다.</p>
+      </div>
+    </header>
+    
+    <form class="tools" id="add-form">
+      <input id="title" aria-label="영화 제목" placeholder="영화 제목 추가" maxlength="80">
+      <button type="submit">추가</button>
+      <button type="button" class="reset" id="reset">처음으로</button>
+    </form>
+    
+    <p id="message" role="status">영화를 선택해 S·A·B·C로 나누어 보세요.</p>
+    
+    <section class="tiers" id="tiers" aria-label="영화 등급"></section>
+    
+    <section class="pool" aria-label="아직 안 정한 영화">
+      <button class="pool-head" id="pool-label" type="button">아직 안 정한 영화 (여기를 눌러 복귀)</button>
+      <div class="drop" id="pool" data-tier="pool"></div>
+    </section>
+    
+    <p class="note">같은 브라우저에서 이 파일을 다시 열면 정리한 목록이 남습니다.</p>
+  </main>
+
+  <script>
+    const KEY = "my-movie-tier-list-v1";
+    const LEVELS = ['S', 'A', 'B', 'C'];
+    const INITIAL_TITLES = ["기생충", "인터스텔라", "라라랜드", "센과 치히로의 행방불명", "어벤져스: 엔드게임", "범죄도시", "타이타닉", "토이 스토리"];
+    const COLORS = ["#f2e6dc", "#e3eee7", "#ede7f6", "#fcefd9", "#e2ecf4", "#f6e3e3"];
+
+    // 초기 상태 설정
+    const getInitialState = () => ({
+      nextId: INITIAL_TITLES.length + 1,
+      items: INITIAL_TITLES.map((title, index) => ({ id: 'm' + (index + 1), title, tier: 'pool' }))
+    });
+
+    let state = getInitialState();
+    let selectedId = null;
+
+    // 로컬 스토리지에서 불러오기
+    try {
+      const stored = JSON.parse(localStorage.getItem(KEY));
+      if (stored && Array.isArray(stored.items)) state = stored;
+    } catch (e) { console.error("저장된 데이터를 불러오지 못했습니다."); }
+
+    function save() {
+      localStorage.setItem(KEY, JSON.stringify(state));
+    }
+
+    function showMessage(msg) {
+      document.querySelector('#message').textContent = msg;
+    }
+
+    function move(id, tier) {
+      const item = state.items.find(i => i.id === id);
+      if (item) {
+        item.tier = tier;
+        selectedId = null; // 이동 후 선택 해제
+        save();
+        render();
+        showMessage(`'${item.title}' 영화를 ${tier === 'pool' ? '미분류' : tier + ' 등급'}로 옮겼어요.`);
+      }
+    }
+
+    function createCard(item, index) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'card';
+      card.draggable = true;
+      card.textContent = item.title;
+      card.style.backgroundColor = COLORS[index % COLORS.length];
+      card.setAttribute('aria-pressed', String(selectedId === item.id));
+
+      card.onclick = (e) => {
+        e.stopPropagation();
+        selectedId = (selectedId === item.id) ? null : item.id;
+        render();
+        showMessage(selectedId ? `'${item.title}' 선택됨. 등급(S,A,B,C)을 눌러 옮기세요.` : "선택을 해제했습니다.");
+      };
+
+      card.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', item.id);
+        selectedId = item.id; // 드래그 시작 시 선택 상태로 간주
+      };
+
+      return card;
+    }
+
+    function setupDropZone(element, tier) {
+      element.ondragover = (e) => {
+        e.preventDefault();
+        element.closest('.row')?.classList.add('over');
+      };
+      element.ondragleave = () => {
+        element.closest('.row')?.classList.remove('over');
+      };
+      element.ondrop = (e) => {
+        e.preventDefault();
+        element.closest('.row')?.classList.remove('over');
+        const id = e.dataTransfer.getData('text/plain');
+        move(id, tier);
+      };
+      // 빈 공간 클릭 시 선택된 카드가 있다면 이동
+      element.onclick = () => {
+        if (selectedId) move(selectedId, tier);
+      };
+    }
+
+    function render() {
+      // 1. 등급 영역(S, A, B, C) 렌더링
+      const tiersContainer = document.querySelector('#tiers');
+      tiersContainer.innerHTML = '';
+      
+      LEVELS.forEach(tier => {
+        const row = document.createElement('div');
+        row.className = `row ${tier}`;
+        
+        const label = document.createElement('button');
+        label.type = 'button';
+        label.className = 'label';
+        label.textContent = tier;
+        label.onclick = () => {
+          if (selectedId) move(selectedId, tier);
+          else showMessage("먼저 영화 카드를 선택해 주세요.");
+        };
+
+        const dropZone = document.createElement('div');
+        dropZone.className = 'drop';
+        state.items.filter(i => i.tier === tier).forEach((item, idx) => {
+          dropZone.appendChild(createCard(item, idx));
+        });
+
+        setupDropZone(dropZone, tier);
+        row.append(label, dropZone);
+        tiersContainer.appendChild(row);
+      });
+
+      // 2. 미분류(pool) 영역 렌더링
+      const poolZone = document.querySelector('#pool');
+      poolZone.innerHTML = '';
+      state.items.filter(i => i.tier === 'pool').forEach((item, idx) => {
+        poolZone.appendChild(createCard(item, idx));
+      });
+      setupDropZone(poolZone, 'pool');
+    }
+
+    // 영화 추가 폼
+    document.querySelector('#add-form').onsubmit = (e) => {
+      e.preventDefault();
+      const input = document.querySelector('#title');
+      const title = input.value.trim();
+      
+      if (!title) {
+        showMessage("영화 제목을 입력해 주세요.");
+        return;
+      }
+      
+      state.items.push({ id: 'm' + state.nextId++, title, tier: 'pool' });
+      input.value = '';
+      save();
+      render();
+      showMessage(`'${title}' 카드를 추가했습니다.`);
+    };
+
+    // 처음으로 버튼
+    document.querySelector('#reset').onclick = () => {
+      if (confirm("정말 처음으로 되돌릴까요? 직접 추가한 영화와 배치 내용이 모두 사라집니다.")) {
+        state = getInitialState();
+        selectedId = null;
+        save();
+        render();
+        showMessage("처음 상태로 초기화되었습니다.");
+      }
+    };
+
+    // 미분류 라벨 클릭 시 이동 기능
+    document.querySelector('#pool-label').onclick = () => {
+      if (selectedId) move(selectedId, 'pool');
+    };
+
+    // 초기 실행
+    render();
+  </script>
+</body>
+</html>
